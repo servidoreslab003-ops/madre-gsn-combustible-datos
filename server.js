@@ -4,6 +4,8 @@ const path = require('path');
 const cors = require('cors');
 const os = require('os');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,20 +16,29 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Data']
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ============================================
-// CONFIGURACIÓN DE RUTAS
+// CONFIGURACIÓN - TU IP LOCAL
+// ============================================
+// ¡CAMBIAR POR TU IP LOCAL!
+const TU_IP_LOCAL = '192.168.1.33';
+const PUERTO_LOCAL = 5000;
+
+// ============================================
+// CARPETAS
 // ============================================
 const BASE_PATH = __dirname;
 const DATA_PATH = path.join(BASE_PATH, 'data');
-const CARPETA_PAGINAS = path.join(BASE_PATH, 'combustible', 'paginas_hijo');
-const CARPETA_TEMPLATES = path.join(BASE_PATH, 'combustible', 'templates');
+const COMBUSTIBLE_PATH = path.join(BASE_PATH, 'combustible');
+const PAGINAS_HIJO_PATH = path.join(COMBUSTIBLE_PATH, 'paginas_hijo');
+const TEMPLATES_PATH = path.join(COMBUSTIBLE_PATH, 'templates');
 
 // Crear carpetas necesarias
-[DATA_PATH, CARPETA_PAGINAS, CARPETA_TEMPLATES].forEach(dir => {
+[DATA_PATH, COMBUSTIBLE_PATH, PAGINAS_HIJO_PATH, TEMPLATES_PATH].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
         console.log(`📁 Carpeta creada: ${dir}`);
@@ -48,7 +59,6 @@ let ID_FIJO = null;
 const URL_RENDER = "https://madre-gsn-combustible-datos.onrender.com";
 
 function generarIdFijo() {
-    // Intentar cargar ID guardado
     if (fs.existsSync(DISPOSITIVOS_FILE)) {
         try {
             const data = JSON.parse(fs.readFileSync(DISPOSITIVOS_FILE, 'utf8'));
@@ -62,7 +72,6 @@ function generarIdFijo() {
         }
     }
 
-    // Generar nuevo ID (mismo método que servidor_publico.py)
     try {
         const interfaces = os.networkInterfaces();
         let mac = '';
@@ -82,7 +91,6 @@ function generarIdFijo() {
         const hash = crypto.createHash('md5').update(base).digest('hex').substring(0, 8).toUpperCase();
         ID_FIJO = `GSN-${hash}`;
         
-        // Guardar (mismo formato que servidor_publico.py)
         fs.writeFileSync(DISPOSITIVOS_FILE, JSON.stringify({
             id_fijo: ID_FIJO,
             fecha_creacion: new Date().toISOString(),
@@ -104,14 +112,12 @@ function generarIdFijo() {
 // FUNCIONES DE URL PÚBLICA
 // ============================================
 function obtenerUrlPublica() {
-    // Intentar desde archivo
     if (fs.existsSync(URL_PUBLICA_FILE)) {
         try {
             const data = JSON.parse(fs.readFileSync(URL_PUBLICA_FILE, 'utf8'));
             if (data.url) return data.url;
         } catch (e) {}
     }
-    // Usar URL de Render
     return URL_RENDER;
 }
 
@@ -230,272 +236,221 @@ function validarDispositivo(id) {
 }
 
 // ============================================
-// SERVIDOR DE ARCHIVOS ESTÁTICOS
+// FUNCIÓN DE PROXY
+// ============================================
+function hacerProxy(req, res) {
+    const targetUrl = `http://${TU_IP_LOCAL}:${PUERTO_LOCAL}${req.url}`;
+    
+    console.log(`🔄 Proxy: ${req.method} ${req.url} → ${targetUrl}`);
+    
+    // Verificar si el servidor local está activo
+    const options = {
+        hostname: TU_IP_LOCAL,
+        port: PUERTO_LOCAL,
+        path: req.url,
+        method: req.method,
+        headers: req.headers,
+        timeout: 5000
+    };
+
+    const proxyReq = http.request(options, (proxyRes) => {
+        // Reenviar los headers de la respuesta
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res, { end: true });
+        console.log(`✅ Proxy OK: ${req.url} → ${proxyRes.statusCode}`);
+    });
+
+    proxyReq.on('error', (err) => {
+        console.error(`❌ Error de proxy: ${req.url} - ${err.message}`);
+        
+        // Página de error cuando el servidor local no está disponible
+        res.status(502).send(`
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="UTF-8"><title>🔌 Servidor Local no disponible</title>
+            <style>
+                *{margin:0;padding:0;box-sizing:border-box;}
+                body{background:#0a0f1c;color:#e2e8f0;font-family:system-ui,sans-serif;min-height:100vh;display:flex;justify-content:center;align-items:center;padding:20px;}
+                .container{max-width:500px;width:100%;background:rgba(10,26,10,0.05);backdrop-filter:blur(30px);border-radius:28px;border:1px solid rgba(16,185,129,0.05);padding:40px 30px;text-align:center;}
+                .icono{font-size:4rem;margin-bottom:20px;}
+                h1{font-size:1.5rem;color:#f87171;margin-bottom:10px;}
+                p{color:#94a3b8;font-size:0.9rem;line-height:1.6;}
+                .ip-info{background:rgba(16,185,129,0.05);border-radius:16px;padding:15px;margin:20px 0;border:1px solid rgba(16,185,129,0.1);}
+                .ip-info .label{font-size:0.55rem;text-transform:uppercase;letter-spacing:2px;color:#34d399;opacity:0.3;}
+                .ip-info .valor{font-size:1rem;font-weight:600;color:#10b981;font-family:monospace;margin-top:4px;}
+                .steps{text-align:left;background:rgba(255,255,255,0.03);border-radius:16px;padding:15px 20px;margin:15px 0;}
+                .steps li{font-size:0.7rem;color:#94a3b8;padding:4px 0;list-style-position:inside;}
+                .btn{display:inline-block;padding:12px 30px;margin-top:15px;background:linear-gradient(135deg,#10b981,#059669);border:none;border-radius:40px;color:white;text-decoration:none;font-weight:600;font-size:0.85rem;cursor:pointer;transition:all 0.3s;}
+                .btn:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(16,185,129,0.3);}
+                .btn-secondary{background:transparent;border:1px solid rgba(16,185,129,0.1);color:#34d399;margin-left:10px;}
+                .btn-secondary:hover{background:rgba(16,185,129,0.05);}
+                .id-fijo{color:#f59e0b;font-size:0.7rem;margin-top:15px;font-family:monospace;}
+                .footer{font-size:0.5rem;color:rgba(255,255,255,0.08);margin-top:20px;}
+            </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="icono">🔌</div>
+                    <h1>Servidor Local no disponible</h1>
+                    <p>No se pudo conectar a <strong>main.py</strong> en tu PC local.</p>
+                    
+                    <div class="ip-info">
+                        <div class="label">📍 IP Local del Servidor</div>
+                        <div class="valor">${TU_IP_LOCAL}:${PUERTO_LOCAL}</div>
+                    </div>
+                    
+                    <div class="steps">
+                        <li>Ejecuta <strong>python main.py</strong> en tu PC</li>
+                        <li>Verifica que el puerto ${PUERTO_LOCAL} esté abierto</li>
+                        <li>Asegúrate de estar en la misma red que Render</li>
+                        <li>IP: <strong>${TU_IP_LOCAL}</strong></li>
+                    </div>
+                    
+                    <div>
+                        <button class="btn" onclick="window.location.reload()">🔄 Reintentar</button>
+                        <a href="/fijo" class="btn btn-secondary">🔒 ID Fijo</a>
+                    </div>
+                    
+                    <div class="id-fijo">🔒 ID FIJO: ${ID_FIJO || 'Cargando...'}</div>
+                    <div class="footer">Grupo GSN · Proxy inverso · ${new Date().toLocaleString()}</div>
+                </div>
+                <script>
+                    setTimeout(() => window.location.reload(), 30000);
+                </script>
+            </body>
+            </html>
+        `);
+    });
+
+    // Timeout
+    proxyReq.on('timeout', () => {
+        proxyReq.destroy();
+        console.error(`⏱️ Timeout: ${req.url}`);
+        res.status(504).send(`
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="UTF-8"><title>⏱️ Tiempo de espera agotado</title>
+            <style>body{background:#0a0f1c;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;text-align:center;}</style>
+            </head>
+            <body>
+                <div>
+                    <h1 style="color:#fbbf24;">⏱️ Tiempo de espera agotado</h1>
+                    <p>El servidor local no respondió a tiempo.</p>
+                    <button onclick="window.location.reload()" style="padding:12px 30px;background:#10b981;border:none;border-radius:40px;color:white;font-weight:600;cursor:pointer;margin-top:20px;">Reintentar</button>
+                </div>
+            </body>
+            </html>
+        `);
+    });
+
+    // Si la petición tiene body, enviarlo
+    if (req.method === 'POST' || req.method === 'PUT') {
+        req.pipe(proxyReq, { end: true });
+    } else {
+        proxyReq.end();
+    }
+}
+
+// ============================================
+// PROXY PARA TODAS LAS RUTAS
 // ============================================
 
-// 1. Servir archivos desde 'combustible/paginas_hijo'
-app.use('/paginas_hijo', express.static(CARPETA_PAGINAS));
+// API
+app.use('/api', hacerProxy);
 
-// 2. Servir archivos desde 'combustible/templates'
-app.use('/templates', express.static(CARPETA_TEMPLATES));
+// Páginas principales
+app.use('/primogenito', hacerProxy);
+app.use('/conductor', hacerProxy);
+app.use('/fijo', hacerProxy);
+app.use('/madre', hacerProxy);
+app.use('/modulos', hacerProxy);
+app.use('/static', hacerProxy);
+app.use('/templates', hacerProxy);
+app.use('/p', hacerProxy);
+app.use('/descargar_factura', hacerProxy);
 
-// 3. Servir archivos desde 'combustible' directamente
-app.use('/combustible', express.static(path.join(BASE_PATH, 'combustible')));
+// Cualquier otra ruta
+app.use('*', hacerProxy);
 
 // ============================================
-// RUTA /fijo (Página de ID Fijo)
+// RUTAS DE ESTADO (NO HACEN PROXY)
 // ============================================
-app.get('/fijo', async (req, res) => {
+
+// Estado del servidor
+app.get('/status', (req, res) => {
+    const data = leerUsuarios();
+    const enLinea = data.usuarios.filter(u => u.peer_id && u.peer_id !== null);
+    res.json({
+        status: 'online',
+        timestamp: new Date().toISOString(),
+        total_usuarios: data.usuarios.length,
+        usuarios_en_linea: enLinea.length,
+        id_fijo: ID_FIJO,
+        url_publica: obtenerUrlPublica(),
+        proxy: {
+            activo: true,
+            ip_local: TU_IP_LOCAL,
+            puerto_local: PUERTO_LOCAL,
+            estado: 'configurado'
+        },
+        version: '2.0.0'
+    });
+});
+
+// ID Fijo
+app.get('/api/servidor/id', (req, res) => {
+    res.json({
+        ok: true,
+        id: ID_FIJO,
+        nombre: os.hostname(),
+        url: obtenerUrlPublica()
+    });
+});
+
+// Validar dispositivo
+app.get('/api/servidor/validar/:id', (req, res) => {
+    const dispositivo = validarDispositivo(req.params.id);
+    if (dispositivo) {
+        res.json({
+            ok: true,
+            valido: true,
+            activo: true,
+            dispositivo: dispositivo
+        });
+    } else {
+        res.json({
+            ok: true,
+            valido: false
+        });
+    }
+});
+
+// URL pública
+app.get('/api/servidor/url', (req, res) => {
+    res.json({
+        ok: true,
+        url: obtenerUrlPublica(),
+        url_con_id: obtenerUrlConId(),
+        id: ID_FIJO
+    });
+});
+
+// Información del servidor
+app.get('/api/servidor/info', async (req, res) => {
     try {
         const info = await getInfoServidorCompleto();
-        const urlPublica = obtenerUrlPublica();
-        const urlConId = obtenerUrlConId();
-        
-        res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head><meta charset="UTF-8"><title>Servidor Fijo - Grupo GSN</title>
-        <style>
-            *{margin:0;padding:0;box-sizing:border-box;}
-            body{font-family:system-ui,sans-serif;background:#0a0f1c;color:#34d399;min-height:100vh;display:flex;justify-content:center;align-items:center;padding:20px;}
-            .container{max-width:600px;width:100%;background:rgba(10,26,10,0.05);backdrop-filter:blur(30px);border-radius:28px;border:1px solid rgba(16,185,129,0.05);padding:40px 30px;text-align:center;animation:fadeIn 0.5s ease;}
-            @keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
-            .logo{font-size:3rem;margin-bottom:15px;}
-            .badge-fijo{background:rgba(245,158,11,0.1);color:#f59e0b;padding:4px 14px;border-radius:20px;font-size:0.6rem;font-weight:600;border:1px solid rgba(245,158,11,0.1);display:inline-block;margin-bottom:10px;}
-            h1{font-size:1.5rem;color:#10b981;margin-bottom:5px;}
-            .subtitle{font-size:0.8rem;opacity:0.3;margin-bottom:20px;}
-            .id-box{background:rgba(16,185,129,0.05);padding:15px 20px;border-radius:16px;font-family:monospace;font-size:2rem;color:#10b981;letter-spacing:4px;border:2px solid rgba(16,185,129,0.1);margin:15px 0;}
-            .id-box .label{font-size:0.6rem;text-transform:uppercase;letter-spacing:2px;color:#34d399;opacity:0.3;display:block;margin-bottom:5px;}
-            .id-box .fijo-label{font-size:0.5rem;color:#f59e0b;opacity:0.6;display:block;margin-top:5px;}
-            .enlace-publico{background:rgba(16,185,129,0.05);padding:12px 16px;border-radius:12px;border:1px solid rgba(16,185,129,0.1);margin:10px 0;word-break:break-all;}
-            .enlace-publico .label{font-size:0.55rem;text-transform:uppercase;letter-spacing:1px;color:#34d399;opacity:0.3;display:block;margin-bottom:4px;}
-            .enlace-publico .value{font-size:0.85rem;color:#f59e0b;font-family:monospace;}
-            .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0;}
-            .grid .item{background:rgba(16,185,129,0.03);padding:12px;border-radius:12px;border:1px solid rgba(16,185,129,0.03);}
-            .grid .item .label{font-size:0.55rem;text-transform:uppercase;letter-spacing:1px;color:#34d399;opacity:0.3;}
-            .grid .item .value{font-size:0.85rem;font-weight:600;margin-top:4px;color:#10b981;word-break:break-all;}
-            .grid .item .value.ip-actual{color:#f59e0b;font-size:0.9rem;}
-            .status{display:inline-block;padding:4px 14px;border-radius:20px;font-size:0.7rem;font-weight:600;background:rgba(16,185,129,0.1);color:#34d399;}
-            .status.online{background:rgba(16,185,129,0.15);color:#34d399;animation:pulse 2s infinite;}
-            @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.6;}}
-            .btn{display:inline-block;padding:14px 30px;margin:8px 5px;background:linear-gradient(135deg,#10b981,#059669);border:none;border-radius:40px;color:white;text-decoration:none;font-weight:600;font-size:0.9rem;cursor:pointer;transition:all 0.3s ease;}
-            .btn:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(16,185,129,0.3);}
-            .btn-secondary{background:transparent;border:1px solid rgba(16,185,129,0.1);color:#34d399;}
-            .btn-secondary:hover{background:rgba(16,185,129,0.05);}
-            .conectar-area{margin-top:25px;padding-top:25px;border-top:1px solid rgba(16,185,129,0.05);}
-            .conectar-area input{width:100%;padding:14px 18px;background:rgba(10,26,10,0.05);border:1px solid rgba(16,185,129,0.05);border-radius:14px;color:#34d399;font-size:1.1rem;text-align:center;font-family:monospace;letter-spacing:2px;margin-bottom:12px;}
-            .conectar-area input:focus{outline:none;border-color:rgba(16,185,129,0.1);}
-            .conectar-area input::placeholder{color:#34d399;opacity:0.2;}
-            .info{margin-top:20px;font-size:0.6rem;color:#34d399;opacity:0.15;}
-            .ultima-act{font-size:0.55rem;color:#34d399;opacity:0.2;margin-top:5px;}
-            .mensaje-conexion{margin-top:12px;font-size:0.8rem;min-height:20px;color:#fbbf24;}
-            .mensaje-conexion.error{color:#f87171;}
-            .mensaje-conexion.ok{color:#34d399;}
-            .copy-btn{background:rgba(16,185,129,0.05);border:none;color:#34d399;padding:4px 12px;border-radius:8px;cursor:pointer;font-size:0.7rem;margin-left:8px;}
-            .copy-btn:hover{background:rgba(16,185,129,0.1);}
-            @media(max-width:480px){.container{padding:25px 18px;}.id-box{font-size:1.4rem;}.grid{grid-template-columns:1fr;}}
-        </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="logo">🔒</div>
-                <div class="badge-fijo">ID FIJO - NUNCA CAMBIA</div>
-                <h1>Servidor Fijo</h1>
-                <p class="subtitle">Conéctate desde cualquier red usando tu ID</p>
-                <div class="id-box"><span class="label">🆔 TU ID FIJO</span>${ID_FIJO}<span class="fijo-label">🔒 Este ID es permanente</span></div>
-                <div class="enlace-publico"><span class="label">🌐 ENLACE PÚBLICO (Comparte con otros)</span><div class="value" id="enlacePublico">${urlPublica || 'No disponible'}</div><button class="copy-btn" onclick="copiarEnlace()">📋 Copiar enlace</button></div>
-                <div class="enlace-publico" style="border-color:rgba(245,158,11,0.2);"><span class="label">🔗 ENLACE DIRECTO CON TU ID</span><div class="value" id="enlaceDirecto" style="font-size:0.7rem;color:#fbbf24;">${urlConId || 'No disponible'}</div><button class="copy-btn" onclick="copiarEnlaceDirecto()">📋 Copiar</button></div>
-                <div><span class="status online">🟢 Servidor activo</span></div>
-                <div class="grid">
-                    <div class="item"><div class="label">IP Pública Actual</div><div class="value ip-actual" id="ipPublica">${info.ip_publica || 'No disponible'}</div></div>
-                    <div class="item"><div class="label">Puerto</div><div class="value">${PORT}</div></div>
-                    <div class="item"><div class="label">Estado</div><div class="value" style="color:#34d399;">✅ Activo</div></div>
-                    <div class="item"><div class="label">Última Actualización</div><div class="value" style="font-size:0.7rem;">${info.ultima_actualizacion.slice(0,19).replace('T', ' ')}</div></div>
-                </div>
-                <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
-                    <a href="/" class="btn">🏠 Ir al Sistema</a>
-                    <a href="/primogenito" class="btn" style="background:linear-gradient(135deg,#3b82f6,#2563eb);">📱 Primogénito</a>
-                    <a href="/conductor" class="btn" style="background:linear-gradient(135deg,#10b981,#059669);">🚛 Conductor</a>
-                    <button class="btn btn-secondary" onclick="copiarID()">📋 Copiar ID</button>
-                </div>
-                <div class="conectar-area">
-                    <p style="font-size:0.8rem; opacity:0.3; margin-bottom:12px;">🔗 Conectar a otro dispositivo por ID</p>
-                    <input type="text" id="idBuscar" placeholder="Ingresa el ID del otro dispositivo" value="">
-                    <button class="btn" onclick="conectarPorID()" style="width:100%;">🔗 Conectar</button>
-                    <div id="mensajeConexion" class="mensaje-conexion"></div>
-                </div>
-                <div class="ultima-act">🕐 Última actualización: ${info.ultima_actualizacion.slice(0,19).replace('T', ' ')}</div>
-                <div class="info">Grupo GSN - ID Fijo | ${new Date().toISOString().slice(0,19).replace('T', ' ')}</div>
-            </div>
-            <script>
-                function copiarID(){const id="${ID_FIJO}";navigator.clipboard.writeText(id).then(()=>{const btn=event.target;btn.textContent='✅ Copiado!';setTimeout(()=>btn.textContent='📋 Copiar ID',2000);});}
-                function copiarEnlace(){const texto=document.getElementById('enlacePublico').textContent;navigator.clipboard.writeText(texto).then(()=>{const btn=event.target;btn.textContent='✅ Copiado!';setTimeout(()=>btn.textContent='📋 Copiar enlace',2000);});}
-                function copiarEnlaceDirecto(){const texto=document.getElementById('enlaceDirecto').textContent;navigator.clipboard.writeText(texto).then(()=>{const btn=event.target;btn.textContent='✅ Copiado!';setTimeout(()=>btn.textContent='📋 Copiar',2000);});}
-                function conectarPorID(){const input=document.getElementById('idBuscar');const id=input.value.trim().toUpperCase();const msg=document.getElementById('mensajeConexion');if(!id){msg.textContent='⚠️ Ingresa un ID válido';msg.className='mensaje-conexion error';return;}msg.textContent='🔄 Buscando dispositivo...';msg.className='mensaje-conexion';fetch('/api/servidor/validar/'+id).then(res=>res.json()).then(data=>{if(data.ok&&data.valido){msg.innerHTML='✅ Conectado a <strong>'+data.dispositivo.nombre+'</strong><br>📡 ID: '+data.dispositivo.id;msg.className='mensaje-conexion ok';setTimeout(()=>{window.location.href='/?conectar='+id;},1500);}else{msg.textContent='❌ ID no válido o dispositivo inactivo';msg.className='mensaje-conexion error';}}).catch(err=>{msg.textContent='❌ Error: '+err.message;msg.className='mensaje-conexion error';});}
-                document.getElementById('idBuscar').addEventListener('keypress',function(e){if(e.key==='Enter')conectarPorID();});
-            </script>
-        </body>
-        </html>
-        `);
+        res.json({
+            ok: true,
+            ...info,
+            proxy: {
+                activo: true,
+                ip_local: TU_IP_LOCAL,
+                puerto_local: PUERTO_LOCAL
+            }
+        });
     } catch (error) {
-        res.status(500).send(`<h1>Error</h1><p>${error.message}</p>`);
+        res.status(500).json({ ok: false, error: error.message });
     }
-});
-
-// ============================================
-// RUTA /primogenito
-// ============================================
-app.get('/primogenito', (req, res) => {
-    // Buscar archivo en varias ubicaciones posibles
-    const posiblesRutas = [
-        path.join(CARPETA_PAGINAS, 'primogenito.html'),
-        path.join(BASE_PATH, 'combustible', 'paginas_hijo', 'primogenito.html'),
-        path.join(BASE_PATH, 'paginas_hijo', 'primogenito.html'),
-        path.join(BASE_PATH, 'primogenito.html')
-    ];
-    
-    for (const ruta of posiblesRutas) {
-        if (fs.existsSync(ruta)) {
-            try {
-                let html = fs.readFileSync(ruta, 'utf8');
-                const urlBase = obtenerUrlPublica();
-                // Reemplazar API_URL con la URL pública
-                html = html.replace(/var API_URL\s*=\s*"";/g, `var API_URL = "${urlBase}";`);
-                html = html.replace(/const API_URL\s*=\s*"";/g, `const API_URL = "${urlBase}";`);
-                html = html.replace(/let API_URL\s*=\s*"";/g, `let API_URL = "${urlBase}";`);
-                // Reemplazar ID fijo
-                html = html.replace(/ID_FIJO/g, ID_FIJO);
-                res.send(html);
-                console.log(`✅ Sirviendo: ${ruta}`);
-                return;
-            } catch (e) {
-                console.error(`❌ Error leyendo ${ruta}:`, e.message);
-            }
-        }
-    }
-    
-    // Si no se encuentra, mostrar HTML alternativo
-    res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><title>Primogénito - Grupo GSN</title>
-    <style>body{background:#0a0f1c;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;text-align:center;}</style>
-    </head>
-    <body>
-        <div>
-            <h1 style="color:#3b82f6;">📱 Primogénito</h1>
-            <p>App de Pedidos Móvil - Grupo GSN</p>
-            <p style="color:#f59e0b;">🔒 ID Fijo: ${ID_FIJO}</p>
-            <p style="opacity:0.3;font-size:0.8rem;">El archivo primogenito.html no se encontró. Crea la página o usa la ruta <a href="/paginas_hijo/primogenito.html" style="color:#3b82f6;">/paginas_hijo/primogenito.html</a></p>
-        </div>
-    </body>
-    </html>
-    `);
-});
-
-// ============================================
-// RUTA /conductor
-// ============================================
-app.get('/conductor', (req, res) => {
-    const posiblesRutas = [
-        path.join(CARPETA_PAGINAS, 'conductor.html'),
-        path.join(BASE_PATH, 'combustible', 'paginas_hijo', 'conductor.html'),
-        path.join(BASE_PATH, 'paginas_hijo', 'conductor.html'),
-        path.join(BASE_PATH, 'conductor.html')
-    ];
-    
-    for (const ruta of posiblesRutas) {
-        if (fs.existsSync(ruta)) {
-            try {
-                let html = fs.readFileSync(ruta, 'utf8');
-                const urlBase = obtenerUrlPublica();
-                html = html.replace(/var API_URL\s*=\s*"";/g, `var API_URL = "${urlBase}";`);
-                html = html.replace(/const API_URL\s*=\s*"";/g, `const API_URL = "${urlBase}";`);
-                html = html.replace(/let API_URL\s*=\s*"";/g, `let API_URL = "${urlBase}";`);
-                html = html.replace(/ID_FIJO/g, ID_FIJO);
-                res.send(html);
-                console.log(`✅ Sirviendo: ${ruta}`);
-                return;
-            } catch (e) {
-                console.error(`❌ Error leyendo ${ruta}:`, e.message);
-            }
-        }
-    }
-    
-    res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><title>Conductor - Grupo GSN</title>
-    <style>body{background:#0a0f1c;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;text-align:center;}</style>
-    </head>
-    <body>
-        <div>
-            <h1 style="color:#10b981;">🚛 Conductor</h1>
-            <p>App de Rastreo GPS - Grupo GSN</p>
-            <p style="color:#f59e0b;">🔒 ID Fijo: ${ID_FIJO}</p>
-            <p style="opacity:0.3;font-size:0.8rem;">El archivo conductor.html no se encontró. Crea la página o usa la ruta <a href="/paginas_hijo/conductor.html" style="color:#10b981;">/paginas_hijo/conductor.html</a></p>
-        </div>
-    </body>
-    </html>
-    `);
-});
-
-// ============================================
-// RUTA PRINCIPAL
-// ============================================
-app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><title>Grupo GSN - Sistema de Gestión</title>
-    <style>
-        body{background:#0a0f1c;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;text-align:center;margin:0;padding:20px;}
-        .container{max-width:600px;}
-        h1{color:#f59e0b;font-size:2.5rem;margin-bottom:10px;}
-        .logo{font-size:4rem;margin-bottom:20px;}
-        .cards{display:flex;flex-wrap:wrap;gap:15px;justify-content:center;margin:30px 0;}
-        .card{background:rgba(255,255,255,0.05);padding:20px 30px;border-radius:16px;border:1px solid rgba(255,255,255,0.1);min-width:150px;text-decoration:none;color:#fff;transition:all 0.3s;}
-        .card:hover{transform:translateY(-5px);background:rgba(255,255,255,0.1);}
-        .card .icon{font-size:2rem;display:block;margin-bottom:8px;}
-        .card .title{font-weight:600;}
-        .card.primogenito{border-color:#3b82f6;}
-        .card.primogenito:hover{box-shadow:0 0 30px rgba(59,130,246,0.2);}
-        .card.conductor{border-color:#10b981;}
-        .card.conductor:hover{box-shadow:0 0 30px rgba(16,185,129,0.2);}
-        .card.fijo{border-color:#f59e0b;}
-        .card.fijo:hover{box-shadow:0 0 30px rgba(245,158,11,0.2);}
-        .badge{display:inline-block;padding:4px 16px;border-radius:20px;font-size:0.7rem;font-weight:600;background:rgba(16,185,129,0.1);color:#34d399;margin-top:5px;}
-        .id-box{background:rgba(245,158,11,0.05);padding:15px;border-radius:12px;border:1px solid rgba(245,158,11,0.1);margin:20px 0;font-family:monospace;font-size:1.2rem;color:#f59e0b;}
-    </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="logo">⛽</div>
-            <h1>GRUPO GSN</h1>
-            <p style="opacity:0.5;">Sistema de Gestión de Combustible</p>
-            <div class="id-box">🔒 ID FIJO: ${ID_FIJO}</div>
-            <div class="cards">
-                <a href="/primogenito" class="card primogenito">
-                    <span class="icon">📱</span>
-                    <span class="title">Primogénito</span>
-                    <span class="badge">App de Pedidos</span>
-                </a>
-                <a href="/conductor" class="card conductor">
-                    <span class="icon">🚛</span>
-                    <span class="title">Conductor</span>
-                    <span class="badge">App de Rastreo</span>
-                </a>
-                <a href="/fijo" class="card fijo">
-                    <span class="icon">🔒</span>
-                    <span class="title">Servidor Fijo</span>
-                    <span class="badge">ID Permanente</span>
-                </a>
-            </div>
-            <p style="opacity:0.3;font-size:0.7rem;margin-top:30px;">Servidor activo • ${new Date().toISOString().slice(0,19).replace('T', ' ')}</p>
-        </div>
-    </body>
-    </html>
-    `);
 });
 
 // ============================================
@@ -739,58 +694,7 @@ app.post('/mensaje/leidos', (req, res) => {
 });
 
 // ============================================
-// ENDPOINTS - SERVIDOR PÚBLICO (Compatibilidad Python)
-// ============================================
-
-app.get('/api/servidor/info', async (req, res) => {
-    try {
-        const info = await getInfoServidorCompleto();
-        res.json({
-            ok: true,
-            ...info
-        });
-    } catch (error) {
-        res.status(500).json({ ok: false, error: error.message });
-    }
-});
-
-app.get('/api/servidor/id', (req, res) => {
-    res.json({
-        ok: true,
-        id: ID_FIJO,
-        nombre: os.hostname(),
-        url: obtenerUrlPublica()
-    });
-});
-
-app.get('/api/servidor/validar/:id', (req, res) => {
-    const dispositivo = validarDispositivo(req.params.id);
-    if (dispositivo) {
-        res.json({
-            ok: true,
-            valido: true,
-            activo: true,
-            dispositivo: dispositivo
-        });
-    } else {
-        res.json({
-            ok: true,
-            valido: false
-        });
-    }
-});
-
-app.get('/api/servidor/url', (req, res) => {
-    res.json({
-        ok: true,
-        url: obtenerUrlPublica(),
-        url_con_id: obtenerUrlConId(),
-        id: ID_FIJO
-    });
-});
-
-// ============================================
-// ENDPOINTS - COMPATIBILIDAD CON CLOUDFLARE
+// COMPATIBILIDAD CON CLOUDFLARE
 // ============================================
 
 app.get('/api/cloudflare_url', (req, res) => {
@@ -817,10 +721,6 @@ app.get('/api/estado_cloudflare', (req, res) => {
     });
 });
 
-// ============================================
-// ENDPOINTS - ENLACES
-// ============================================
-
 app.get('/api/listar_enlaces', (req, res) => {
     const urlPublica = obtenerUrlPublica();
     const urlConId = obtenerUrlConId();
@@ -828,82 +728,63 @@ app.get('/api/listar_enlaces', (req, res) => {
     const enlaces = [
         { id: 'local', nombre: 'Enlace Local', url: `http://localhost:${PORT}`, activo: true, tipo: 'local' },
         { id: 'publico', nombre: 'Enlace Público', url: urlPublica, activo: urlPublica !== null, tipo: 'publico' },
-        { id: 'fijo', nombre: 'Enlace con ID Fijo', url: urlConId, activo: urlConId !== null, tipo: 'fijo' },
-        { id: 'primogenito', nombre: '📱 Primogénito', url: `${urlPublica}/primogenito`, activo: true, tipo: 'app' },
-        { id: 'conductor', nombre: '🚛 Conductor', url: `${urlPublica}/conductor`, activo: true, tipo: 'app' }
+        { id: 'fijo', nombre: 'Enlace con ID Fijo', url: urlConId, activo: urlConId !== null, tipo: 'fijo' }
     ];
     
     res.json({ ok: true, enlaces, total: enlaces.length });
 });
 
 // ============================================
-// ENDPOINTS - ESTADO
-// ============================================
-
-app.get('/status', (req, res) => {
-    const data = leerUsuarios();
-    const enLinea = data.usuarios.filter(u => u.peer_id && u.peer_id !== null);
-    res.json({
-        status: 'online',
-        timestamp: new Date().toISOString(),
-        total_usuarios: data.usuarios.length,
-        usuarios_en_linea: enLinea.length,
-        id_fijo: ID_FIJO,
-        url_publica: obtenerUrlPublica(),
-        version: '2.0.0'
-    });
-});
-
-// ============================================
 // INICIAR SERVIDOR
 // ============================================
 
-// Generar ID Fijo al iniciar
 generarIdFijo();
-
-// Guardar URL pública
 guardarUrlPublica(URL_RENDER);
+
+// Verificar si el servidor local está disponible al iniciar
+function verificarServidorLocal() {
+    const options = {
+        hostname: TU_IP_LOCAL,
+        port: PUERTO_LOCAL,
+        path: '/',
+        method: 'HEAD',
+        timeout: 3000
+    };
+    
+    const req = http.request(options, (res) => {
+        if (res.statusCode < 400) {
+            console.log(`✅ Servidor local disponible en http://${TU_IP_LOCAL}:${PUERTO_LOCAL}`);
+        } else {
+            console.log(`⚠️ Servidor local responde con código ${res.statusCode}`);
+        }
+    });
+    
+    req.on('error', () => {
+        console.log(`⚠️ Servidor local NO disponible en http://${TU_IP_LOCAL}:${PUERTO_LOCAL}`);
+        console.log(`   🔧 Asegúrate de ejecutar: python main.py`);
+    });
+    
+    req.end();
+}
 
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`🔒 SERVIDOR PÚBLICO - GRUPO GSN (Node.js)`);
+    console.log(`🔒 SERVIDOR PROXY - GRUPO GSN`);
     console.log(`${'='.repeat(60)}`);
     console.log(`   ID FIJO: ${ID_FIJO}`);
     console.log(`   Puerto: ${PORT}`);
-    
-    const ipPublica = await obtenerIpPublica();
-    if (ipPublica) {
-        console.log(`   IP Pública: ${ipPublica}`);
-        console.log(`   URL Pública: http://${ipPublica}:${PORT}`);
-    } else {
-        console.log(`   IP Pública: No disponible`);
-    }
     console.log(`   URL Render: ${URL_RENDER}`);
-    console.log(`   IP Local: ${obtenerIpLocal()}`);
+    console.log(`   IP Local del proxy: ${obtenerIpLocal()}`);
+    console.log(`\n   📡 PROXY CONFIGURADO:`);
+    console.log(`      ${URL_RENDER} → http://${TU_IP_LOCAL}:${PUERTO_LOCAL}`);
     console.log(`${'='.repeat(60)}`);
-    
-    console.log(`\n📄 GET  /               - Página principal`);
-    console.log(`🔒 GET  /fijo            - Página del ID Fijo`);
-    console.log(`📱 GET  /primogenito     - App de Pedidos`);
-    console.log(`🚛 GET  /conductor       - App de Rastreo`);
-    console.log(`📄 GET  /paginas_hijo/   - Archivos estáticos`);
-    console.log(`📄 GET  /templates/      - Templates`);
-    
-    console.log(`\n📄 GET  /usuarios`);
-    console.log(`📝 POST /usuarios`);
-    console.log(`✏️ PUT  /usuarios/:id`);
-    console.log(`🤝 POST /amistad/solicitar`);
-    console.log(`✅ POST /amistad/aceptar`);
-    console.log(`❌ POST /amistad/rechazar`);
-    console.log(`💬 POST /mensaje/enviar`);
-    console.log(`📩 GET  /mensaje/pendientes/:id`);
-    console.log(`📖 POST /mensaje/leidos`);
-    
-    console.log(`\n🔒 GET  /api/servidor/info`);
-    console.log(`🔒 GET  /api/servidor/id`);
-    console.log(`🔒 GET  /api/servidor/validar/:id`);
-    console.log(`🔒 GET  /api/servidor/url`);
-    console.log(`📊 GET  /status`);
+    console.log(`\n📱 APPS DISPONIBLES:`);
+    console.log(`   📱 Primogénito: ${URL_RENDER}/primogenito`);
+    console.log(`   🚛 Conductor:   ${URL_RENDER}/conductor`);
+    console.log(`   🔒 ID Fijo:     ${URL_RENDER}/fijo`);
+    console.log(`   📊 Dashboard:   ${URL_RENDER}/madre`);
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`✅ Servidor listo!`);
+    
+    // Verificar servidor local
+    setTimeout(verificarServidorLocal, 2000);
 });
