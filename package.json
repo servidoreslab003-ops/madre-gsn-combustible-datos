@@ -1,7 +1,7 @@
 {
-  "name": "chat-p2p-server",
+  "name": "tunel-render-gsn",
   "version": "2.0.0",
-  "description": "Servidor con ID Fijo - Chat P2P, mensajes offline y túnel inverso como Cloudflare",
+  "description": "Túnel inverso con Socket.io - Grupo GSN",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,21 +10,19 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "http-proxy-middleware": "^2.0.6",
+    "socket.io": "^4.6.1",
+    "socket.io-client": "^4.6.1",
     "axios": "^1.6.2"
   },
   "engines": {
     "node": ">=14.0.0"
   },
   "keywords": [
-    "chat",
-    "p2p",
-    "peerjs",
-    "webrtc",
-    "offline-messages",
     "tunnel",
+    "socket.io",
     "proxy",
-    "cloudflare"
+    "cloudflare",
+    "gsn"
   ],
   "author": "Grupo GSN",
   "license": "MIT"
